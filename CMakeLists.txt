@@ -12,3 +12,5 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 enable_testing()
 
 add_subdirectory(calculator)
+add_subdirectory(horses_neigh)
+add_subdirectory(link_list)
