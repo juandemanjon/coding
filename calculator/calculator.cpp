@@ -4,6 +4,7 @@
 #include <vector>
 #include <stack>
 #include <iostream>
+#include <queue>
 
 struct Token
 {
@@ -323,3 +324,262 @@ TEST_CASE("end to end")
         REQUIRE(got == tc.expected);
     }
 }
+
+struct ICharDataSource
+{
+    virtual bool HasNext() = 0;
+    virtual char GetNext() = 0;
+};
+
+struct StringExpression : ICharDataSource
+{
+    StringExpression(std::string_view input) : _input(input), _it(_input.begin()) { ; }
+    
+    bool HasNext() override { return _it != _input.end(); }
+
+    char GetNext() override { return *_it++; }
+    
+private:
+    std::string_view _input;
+    std::string_view::const_iterator _it;   
+};
+
+TEST_CASE("StringExpression")
+{
+    // GIVEN an expression with "123"
+    StringExpression se{"123"};
+    
+    // THEN data '1' is available 
+    REQUIRE(se.HasNext());
+    REQUIRE(se.GetNext() == '1');
+
+    // AND data '2' is available 
+    REQUIRE(se.HasNext());
+    REQUIRE(se.GetNext() == '2');
+
+    // AND data '3' is available 
+    REQUIRE(se.HasNext());
+    REQUIRE(se.GetNext() == '3');
+
+    // AND no more data is available
+    REQUIRE(!se.HasNext());
+}
+
+class Expression2RPN
+{
+  public:
+    Expression2RPN(ICharDataSource &exp) : _exp(exp)
+    { 
+        readTokenFromCharDataSource();
+        readTokenFromExpQueue();
+    }
+
+    bool HasNext() { return !_rpnQueue.empty(); }
+    
+    Token GetNext() 
+    { 
+        auto token = _rpnQueue.front();
+        _rpnQueue.pop();
+        readTokenFromExpQueue();
+        return token; 
+    }
+
+  private:
+
+    bool hasExpNext() { return !_expQueue.empty(); }
+    
+    Token getExpNext() 
+    { 
+        auto token = _expQueue.front();
+        _expQueue.pop();
+        readTokenFromCharDataSource();
+        return token; 
+    }
+    
+    ICharDataSource &_exp;
+    
+    void readTokenFromCharDataSource()
+    {
+        std::string number;
+        
+        while (_expQueue.empty() && _exp.HasNext())
+        {
+            auto c = _exp.GetNext();
+            switch (c)
+            {
+                case ' ':
+                    if (!number.empty())
+                    {
+                        _expQueue.push(Token(atoi(number.c_str())));
+                        return;
+                    }
+                    break;
+                case '+':
+                case '-':
+                case '*':
+                case '/':
+                case '(':
+                case ')':
+                    if (!number.empty())
+                    {
+                        _expQueue.push(Token(atoi(number.c_str())));
+                    }
+                    _expQueue.push(Token(c));
+                    return;
+                default:
+                    number += c;
+            }           
+        }
+
+        if (!number.empty())
+        {
+            _expQueue.push(Token(atoi(number.c_str())));
+        }
+    }
+
+    void readTokenFromExpQueue()
+    {
+        while (_rpnQueue.empty() && hasExpNext())
+        {
+            auto token = getExpNext();
+            if (!token.Operator)
+            {
+                _rpnQueue.push(token);
+                return;
+            }
+            else
+            {
+                if (operators.empty() || token.Operator == '(')
+                {
+                    operators.push(token);
+                }
+                else if (token.Operator == ')')
+                {
+                    while (!operators.empty() && operators.top().Operator != '(')
+                    {
+                        _rpnQueue.push(operators.top());
+                        operators.pop();
+                    }
+                    if (!operators.empty())
+                    {
+                        operators.pop();  // remove '('
+                    }
+                    if (!_rpnQueue.empty())
+                        return;
+                }
+                else
+                {
+                    auto token_priority = priority(token);
+                    while (!operators.empty() && priority(operators.top()) > token_priority)
+                    {
+                        _rpnQueue.push(operators.top());
+                        operators.pop();
+                    }
+                    operators.push(token);
+                    if (!_rpnQueue.empty())
+                        return;
+                }
+            }
+        }
+
+        if (_rpnQueue.empty() && !hasExpNext() && !operators.empty())
+        {
+            _rpnQueue.push(operators.top());
+            operators.pop();
+        }
+    }
+    
+    std::queue<Token> _expQueue;
+    std::queue<Token> _rpnQueue;
+
+    std::stack<Token> operators;    
+};
+
+TEST_CASE("Expression2RPN")
+{
+    StringExpression exp{" (123 + 456) + 789 "};
+    
+    Expression2RPN parser{exp};
+    
+    REQUIRE(parser.HasNext());
+    REQUIRE(parser.GetNext() == Token{123});
+
+    REQUIRE(parser.HasNext());
+    REQUIRE(parser.GetNext() == Token{456});
+
+    REQUIRE(parser.HasNext());
+    REQUIRE(parser.GetNext() == Token{'+'});
+
+    REQUIRE(parser.HasNext());
+    REQUIRE(parser.GetNext() == Token{789});
+
+    REQUIRE(parser.HasNext());
+    REQUIRE(parser.GetNext() == Token{'+'});
+
+    REQUIRE(!parser.HasNext());
+}
+
+double Compute(Expression2RPN &input)
+{
+    std::stack<double> values;
+
+    while (input.HasNext())
+    {
+        auto token = input.GetNext();
+
+        if (token.Operator)
+        {
+            // Get values. TODO: validate stack is not empty before calling top()
+            auto value2 = values.top();
+            values.pop();
+            auto value1 = values.top();
+            values.pop();
+
+            values.push(Compute(value1, value2, token.Operator));
+        }
+        else
+        {
+            values.push(token.Number);
+        }
+    }
+    return values.top();
+}
+
+TEST_CASE("end to end Expression2RPN")
+{
+    struct TestCase
+    {
+        std::string_view exp;
+
+        double expected;
+    };
+
+    std::vector<TestCase> test_cases(
+        {
+            {"1 + 2",   3},
+            {"1 - 2",   -1},
+            {"1 * 2",   2},
+            {"1 / 2",   0.5},
+
+            {"1 + 2 + 3",   6},
+            {"1 + 2 - 3",   0},
+            {"1 + 2 * 3",   7},
+            {"1 + 2 / 4",   1.5},
+            {"1 + (2 * 3)",   7},
+            {"1 + (2 / 4)",   1.5},
+            {"(1 + 2) * 3",   9},
+            {"(1 + 2) / 3",   1},
+        }
+    );
+    
+    for (const auto &tc: test_cases) {
+        StringExpression exp{tc.exp};       
+        Expression2RPN expRPN{exp};
+
+        auto got = Compute(expRPN);
+        INFO(tc.exp);
+        REQUIRE(got == tc.expected);
+    }
+}
+
+
